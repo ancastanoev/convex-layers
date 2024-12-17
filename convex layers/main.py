@@ -117,7 +117,7 @@ class ConvexLayersGUI:
         self.dynamic_layers.set_algorithm(new_algo)
         if len(self.dynamic_layers.points) > 0:
             self.dynamic_layers.compute_layers()
-            self.display_visualization()
+            self.display_visualiation()
 
     def load_random_points(self):
         # load random points and update visualization
