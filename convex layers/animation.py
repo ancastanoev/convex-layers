@@ -1,7 +1,7 @@
 # animation.py
 import turtle
 import time
-import numpy as np
+import multiprocessing
 
 class TurtleAnimation:
     def __init__(self, dynamic_layers, width=800, height=600, margin=50):
@@ -11,27 +11,16 @@ class TurtleAnimation:
         self.height = height
         self.margin = margin
 
-        self.screen = turtle.Screen()
-        self.screen.title("Convex Layers Computation Animation")
-        self.screen.setup(width=self.width, height=self.height)
+        self.process = None  # To keep track of the animation process
 
-        self.t = turtle.Turtle()
-        self.t.speed(0)
-        self.t.hideturtle()
-
-        self.scale = 1
-        self.offset_x = 0
-        self.offset_y = 0
-
-    def _compute_scale_and_offset(self, steps):
-
-        #we compute the scale and offset so that points fit within the Turtle window
+    @staticmethod
+    def _compute_scale_and_offset_static(steps, width, height, margin):
 
         all_x = [p[0] for step in steps for p in step["points"]]
         all_y = [p[1] for step in steps for p in step["points"]]
 
         if not all_x or not all_y:
-            return
+            return 1, 0, 0  # Default scale and offsets
 
         min_x, max_x = min(all_x), max(all_x)
         min_y, max_y = min(all_y), max(all_y)
@@ -39,89 +28,146 @@ class TurtleAnimation:
         data_width = max_x - min_x
         data_height = max_y - min_y
 
-        if data_width == 0:
-            data_width = 1
-        if data_height == 0:
-            data_height = 1
+        # Prevent division by zero
+        data_width = data_width if data_width != 0 else 1
+        data_height = data_height if data_height != 0 else 1
 
-        # calculate scale to fit points in window
-        scale_x = (self.width - 2 * self.margin) / data_width
-        scale_y = (self.height - 2 * self.margin) / data_height
-        self.scale = min(scale_x, scale_y)
+        # Calculate scale to fit points within the window considering margins
+        scale_x = (width - 2 * margin) / data_width
+        scale_y = (height - 2 * margin) / data_height
+        scale = min(scale_x, scale_y)
 
-        # offset to center the points
+        # Calculate offsets to center the points
         data_center_x = (min_x + max_x) / 2.0
         data_center_y = (min_y + max_y) / 2.0
 
-        self.offset_x = -data_center_x * self.scale
-        self.offset_y = -data_center_y * self.scale
+        offset_x = -data_center_x * scale
+        offset_y = -data_center_y * scale
 
-    def _to_screen_coords(self, x, y):
-       #we convert points to turtle screen coordinates
+        return scale, offset_x, offset_y
 
-        sx = x * self.scale + self.offset_x
-        sy = y * self.scale + self.offset_y
+    @staticmethod
+    def _to_screen_coords(x, y, scale, offset_x, offset_y):
+
+        sx = x * scale + offset_x
+        sy = y * scale + offset_y
         return sx, sy
 
-    def _draw_points(self, points, color='blue'):
+    @staticmethod
+    def _draw_points(t, points, scale, offset_x, offset_y, color='blue'):
 
-        self.t.penup()
-        self.t.color(color)
+        t.penup()
+        t.color(color)
         for p in points:
-            x, y = self._to_screen_coords(p[0], p[1])
-            self.t.goto(x, y)
-            self.t.dot(5)
+            x, y = TurtleAnimation._to_screen_coords(p[0], p[1], scale, offset_x, offset_y)
+            t.goto(x, y)
+            t.dot(5)
 
-    def _draw_hull_animated(self, hull, draw_color='red', final_color='green'):
+    @staticmethod
+    def _draw_hull_animated(t, hull, scale, offset_x, offset_y, draw_color='red', final_color='green'):
 
         if len(hull) == 0:
             return
 
         # Draw hull in red with animation
-        self.t.color(draw_color)
-        self.t.width(3)
-        self.t.penup()
-        x0, y0 = self._to_screen_coords(hull[0][0], hull[0][1])
-        self.t.goto(x0, y0)
-        self.t.pendown()
+        t.color(draw_color)
+        t.width(3)
+        t.penup()
+        x0, y0 = TurtleAnimation._to_screen_coords(hull[0][0], hull[0][1], scale, offset_x, offset_y)
+        t.goto(x0, y0)
+        t.pendown()
 
         for i in range(1, len(hull)):
-            x, y = self._to_screen_coords(hull[i][0], hull[i][1])
-            self.t.goto(x, y)
-            time.sleep(0.1)
+            x, y = TurtleAnimation._to_screen_coords(hull[i][0], hull[i][1], scale, offset_x, offset_y)
+            t.goto(x, y)
+            time.sleep(0.1)  # Control animation speed
 
-        # close the hull
-        self.t.goto(x0, y0)
+        # Close the hull
+        t.goto(x0, y0)
         time.sleep(0.5)
 
-        # redraw hull in final green color
-        self.t.color(final_color)
-        self.t.width(1)
-        self.t.penup()
-        self.t.goto(x0, y0)
-        self.t.pendown()
+        # Redraw hull in final green color
+        t.color(final_color)
+        t.width(1)
+        t.penup()
+        t.goto(x0, y0)
+        t.pendown()
         for i in range(1, len(hull)):
-            x, y = self._to_screen_coords(hull[i][0], hull[i][1])
-            self.t.goto(x, y)
-        self.t.goto(x0, y0)
+            x, y = TurtleAnimation._to_screen_coords(hull[i][0], hull[i][1], scale, offset_x, offset_y)
+            t.goto(x, y)
+        t.goto(x0, y0)
+
+    @staticmethod
+    def _animate(steps, width, height, margin):
+
+        try:
+            # Initialize Turtle screen
+            screen = turtle.Screen()
+            screen.title("Convex Layers Computation Animation")
+            screen.setup(width=width, height=height)
+            screen.tracer(0)  # Turn off automatic updating for performance
+
+            # Initialize Turtle
+            t = turtle.Turtle()
+            t.speed(0)
+            t.hideturtle()
+
+            # Compute scale and offset based on all steps
+            scale, offset_x, offset_y = TurtleAnimation._compute_scale_and_offset_static(steps, width, height, margin)
+
+            for i, step in enumerate(steps):
+                screen.title(f"Step {i + 1} of {len(steps)}")
+
+                # Draw remaining points in blue
+                TurtleAnimation._draw_points(t, step["points"], scale, offset_x, offset_y, color='blue')
+
+                # Draw current hull
+                TurtleAnimation._draw_hull_animated(t, step["current_hull"], scale, offset_x, offset_y, draw_color='red', final_color='green')
+
+                screen.update()  # Update the Turtle screen
+                time.sleep(0.2)    # Control animation speed
+
+            turtle.done()
+
+        except turtle.Terminator:
+            print("Turtle animation terminated.")
+        except Exception as e:
+            print(f"An error occurred in Turtle animation: {e}")
 
     def run_animation(self):
-
-        steps = self.dynamic_layers.get_computation_steps()
-        if not steps:
-            print("No steps to animate. Make sure layers are being computed.")
+        """
+        Start the Turtle animation in a separate process.
+        """
+        # Check if 'layers' attribute exists in dynamic_layers
+        if not hasattr(self.dynamic_layers, 'layers'):
+            print("Error: 'DynamicConvexLayers' object has no attribute 'layers'.")
             return
 
-        # we compute scale and offsets
-        self._compute_scale_and_offset(steps)
+        # Ensure that layers have been computed
+        layers = self.dynamic_layers.layers  # Assuming 'layers' is a list of layers
+        if not layers:
+            print("No layers to animate. Make sure layers are being computed.")
+            return
 
-        for i, step in enumerate(steps):
-            self.screen.title(f"Step {i + 1} of {len(steps)}")
+        # Prepare steps data
+        steps = []
+        remaining_points = self.dynamic_layers.points.copy()  # Assuming 'points' is a list of (x, y) tuples
+        for layer in layers:
+            steps.append({"points": remaining_points.copy(), "current_hull": layer.copy()})
+            # Remove the current hull points from remaining points for the next layer
+            remaining_points = [p for p in remaining_points if p not in layer]
 
-            #draw remaining points in blue
-            self._draw_points(step["points"], color='blue')
+        if not steps:
+            print("No steps to animate. Ensure that layers are correctly computed.")
+            return
 
-            self._draw_hull_animated(step["current_hull"], draw_color='red', final_color='green')
-            time.sleep(0.2)
+        # Start the separate process for animation
+        self.process = multiprocessing.Process(target=self._animate, args=(steps, self.width, self.height, self.margin))
+        self.process.start()
 
-        turtle.done()
+    def stop_animation(self):
+
+        if self.process and self.process.is_alive():
+            self.process.terminate()
+            self.process.join()
+            self.process = None
